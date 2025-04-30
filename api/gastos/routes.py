@@ -5,13 +5,18 @@ from . import gastos_bp
 
 @gastos_bp.route("/politico/<cpf>", methods=["GET"])
 def gastos_por_politico(cpf):
+    if len(cpf) != 11:
+        cpf = str('0' + cpf)
+
     ano_from  = request.args.get("year_from")
     ano_to    = request.args.get("year_to")
     categoria = request.args.get("categoria")
-    cpf_lower = cpf.strip().lower()
+    page      = int(request.args.get("page", 1))
+    page_size = int(request.args.get("page_size", 50))
+    offset    = (page - 1) * page_size
 
-    # Construir cláusulas de WHERE
-    where_clauses = ["LOWER(cpf) = :cpf"]    # <-- força LOWER aqui
+    cpf_lower = cpf.strip().lower()
+    where_clauses = ["LOWER(cpf) = :cpf"]
     params = {"cpf": cpf_lower}
 
     if ano_from:
@@ -31,21 +36,27 @@ def gastos_por_politico(cpf):
             datEmissao    AS data,
             txtdescricao  AS categoria,
             txtfornecedor AS fornecedor,
-            CAST(vlrdocumento AS NUMERIC) AS valor,
-            urldocumento  AS url,
+            CAST(vlrDocumento AS NUMERIC) AS valor,
+            urlDocumento  AS url,
             ano
         FROM gastos_parlamentares
         WHERE {where_sql}
         ORDER BY datEmissao DESC
-        LIMIT 1000
+        LIMIT :limit OFFSET :offset
     """)
+
+    params["limit"] = page_size
+    params["offset"] = offset
 
     with engine.connect() as conn:
         result = conn.execute(sql, params)
-        # Converte cada RowMapping em dict
-        items = [ dict(row._mapping) for row in result ]
+        items = [dict(row._mapping) for row in result]
 
-    return jsonify(items)
+    return jsonify({
+        "page": page,
+        "page_size": page_size,
+        "results": items
+    })
 
 
 @gastos_bp.route("/aggregate", methods=["GET"])
@@ -55,17 +66,22 @@ def gastos_aggregate():
     Query params:
       - group_by: politico|partido|uf|categoria
       - year_from, year_to
+      - page, page_size
     """
     group_by = request.args.get("group_by", "politico")
     ano_from = request.args.get("year_from")
     ano_to   = request.args.get("year_to")
+    page      = int(request.args.get("page", 1))
+    page_size = int(request.args.get("page_size", 50))
+    offset    = (page - 1) * page_size
 
     key_map = {
         "politico": 'txNomeParlamentar',
-        "partido":   'sgPartido',
-        "uf":        'sgUF',
+        "partido":  'sgPartido',
+        "uf":       'sgUF',
         "categoria": 'txtDescricao'
     }
+
     if group_by not in key_map:
         return jsonify({"error": "group_by inválido"}), 400
 
@@ -89,10 +105,18 @@ def gastos_aggregate():
         {where_sql}
         GROUP BY {key_col}
         ORDER BY total DESC
-        LIMIT 50
+        LIMIT :limit OFFSET :offset
     """)
 
-    with engine.connect() as conn:
-        results = conn.execute(sql, params).mappings().all()
+    params["limit"] = page_size
+    params["offset"] = offset
 
-    return jsonify(results)
+    with engine.connect() as conn:
+        results = conn.execute(sql, params)
+        items = [dict(row._mapping) for row in results]
+
+    return jsonify({
+        "page": page,
+        "page_size": page_size,
+        "results": items
+    })
