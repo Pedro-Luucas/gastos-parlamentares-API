@@ -1,13 +1,17 @@
-from flask import request, jsonify
+import json
+from flask import Response, request, jsonify
 from sqlalchemy import text
 from api.common.db import engine
 from . import gastos_bp
+from decimal import Decimal
 
-@gastos_bp.route("/politico/<cpf>", methods=["GET"])
-def gastos_por_politico(cpf):
-    if len(cpf) != 11:
-        cpf = str('0' + cpf)
+def convert_decimal(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return obj
 
+@gastos_bp.route("/politico/<idecadastro>", methods=["GET"])
+def gastos_por_politico(idecadastro):
     ano_from  = request.args.get("year_from")
     ano_to    = request.args.get("year_to")
     categoria = request.args.get("categoria")
@@ -15,16 +19,16 @@ def gastos_por_politico(cpf):
     page_size = int(request.args.get("page_size", 50))
     offset    = (page - 1) * page_size
 
-    cpf_lower = cpf.strip().lower()
-    where_clauses = ["LOWER(cpf) = :cpf"]
-    params = {"cpf": cpf_lower}
+    idecadastro_lower = idecadastro.strip().lower()
+    where_clauses = ["LOWER(idecadastro) = :idecadastro"]
+    params = {"idecadastro": idecadastro_lower}
 
     if ano_from:
-        where_clauses.append("ano >= :ano_from")
-        params["ano_from"] = ano_from
+        where_clauses.append("numano >= :numano_from")
+        params["numano_from"] = ano_from
     if ano_to:
-        where_clauses.append("ano <= :ano_to")
-        params["ano_to"] = ano_to
+        where_clauses.append("numano <= :numano_to")
+        params["numano_to"] = ano_to
     if categoria:
         where_clauses.append("LOWER(txtdescricao) LIKE :categoria")
         params["categoria"] = f"%{categoria.lower()}%"
@@ -52,11 +56,18 @@ def gastos_por_politico(cpf):
         result = conn.execute(sql, params)
         items = [dict(row._mapping) for row in result]
 
-    return jsonify({
-        "page": page,
-        "page_size": page_size,
-        "results": items
-    })
+    # Convert Decimal para float antes de fazer dump
+    items = [{k: convert_decimal(v) for k, v in item.items()} for item in items]
+
+    return Response(
+        json.dumps({
+            "page": page,
+            "page_size": page_size,
+            "results": items
+        }, ensure_ascii=False),
+        content_type="application/json; charset=utf-8"
+    )
+
 
 
 @gastos_bp.route("/aggregate", methods=["GET"])

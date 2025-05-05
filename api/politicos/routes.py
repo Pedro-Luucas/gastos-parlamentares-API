@@ -18,7 +18,7 @@ def list_politicos():
 
     nome = request.args.get("nome", "").strip().lower()
     sql = """
-        SELECT DISTINCT txNomeParlamentar AS nome, cpf, sgPartido AS partido, sgUF AS uf
+        SELECT DISTINCT txNomeParlamentar AS nome, cpf, idecadastro, sgPartido AS partido, sgUF AS uf
         FROM gastos_parlamentares
         WHERE (:nome = '' OR LOWER(txNomeParlamentar) LIKE :nome_pattern)
         ORDER BY txNomeParlamentar
