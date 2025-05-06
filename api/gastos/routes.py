@@ -1,9 +1,10 @@
 import json
 from flask import Response, request, jsonify
 from sqlalchemy import text
-from api.common.db import engine
+
 from . import gastos_bp
 from decimal import Decimal
+from api.common.db import engine
 
 def convert_decimal(obj):
     if isinstance(obj, Decimal):
@@ -35,99 +36,75 @@ def gastos_por_politico(idecadastro):
 
     where_sql = " AND ".join(where_clauses)
 
+    # SQL principal com campos adicionais no formato da API oficial
     sql = text(f"""
         SELECT
-            datEmissao    AS data,
-            txtdescricao  AS categoria,
-            txtfornecedor AS fornecedor,
-            CAST(vlrDocumento AS NUMERIC) AS valor,
-            urlDocumento  AS url,
-            ano
+            numano AS ano,
+            nummes AS mes,
+            txtdescricao AS tipoDespesa,
+            idedocumento AS codDocumento,
+            indtipodocumento AS tipodocumento,
+            indtipodocumento AS codTipoDocumento,
+            datemissao AS dataDocumento,
+            txtnumero AS numDocumento,
+            CAST(vlrDocumento AS NUMERIC) AS valorDocumento,
+            urlDocumento AS urlDocumento,
+            txtfornecedor AS nomeFornecedor,
+            txtcnpjcpf AS cnpjCpfFornecedor,
+            CAST(vlrliquido AS NUMERIC) AS valorLiquido,
+            COALESCE(CAST(vlrglosa AS NUMERIC), 0) AS valorGlosa,
+            COALESCE(numressarcimento, '') AS numRessarcimento,
+            COALESCE(numlote, '0') AS codLote,
+            COALESCE(numparcela, '0') AS parcela
         FROM gastos_parlamentares
         WHERE {where_sql}
-        ORDER BY datEmissao DESC
+        ORDER BY datemissao DESC
         LIMIT :limit OFFSET :offset
     """)
 
-    params["limit"] = page_size
-    params["offset"] = offset
+    # SQL para contagem total
+    count_sql = text(f"""
+        SELECT COUNT(*) FROM gastos_parlamentares WHERE {where_sql}
+    """)
+
+    params_with_pagination = dict(params)
+    params_with_pagination.update({
+        "limit": page_size,
+        "offset": offset
+    })
 
     with engine.connect() as conn:
-        result = conn.execute(sql, params)
+        # Contagem
+        total = conn.execute(count_sql, params).scalar()
+
+        # Dados paginados
+        result = conn.execute(sql, params_with_pagination)
         items = [dict(row._mapping) for row in result]
 
-    # Convert Decimal para float antes de fazer dump
+
+        tipo_documento_map = {
+    "0": "Nota Fiscal",
+    "1": "Recibo",
+    "2": "Despesa no Exterior",
+    "3": "Despesa do Parlasul",
+    "4": "DANFE/DACTE"
+    }
+
+    for item in items:
+        if "tipoDocumento" in item:
+            item["tipoDocumento"] = tipo_documento_map.get(item["tipoDocumento"], "Outro")
+
     items = [{k: convert_decimal(v) for k, v in item.items()} for item in items]
 
-    return Response(
+    response = Response(
         json.dumps({
             "page": page,
             "page_size": page_size,
+            "total": total,
             "results": items
         }, ensure_ascii=False),
         content_type="application/json; charset=utf-8"
     )
+    response.headers["X-Total-Count"] = str(total)
 
-
-
-@gastos_bp.route("/aggregate", methods=["GET"])
-def gastos_aggregate():
-    """
-    Agrega gastos por uma chave (politico, partido, uf, categoria).
-    Query params:
-      - group_by: politico|partido|uf|categoria
-      - year_from, year_to
-      - page, page_size
-    """
-    group_by = request.args.get("group_by", "politico")
-    ano_from = request.args.get("year_from")
-    ano_to   = request.args.get("year_to")
-    page      = int(request.args.get("page", 1))
-    page_size = int(request.args.get("page_size", 50))
-    offset    = (page - 1) * page_size
-
-    key_map = {
-        "politico": 'txNomeParlamentar',
-        "partido":  'sgPartido',
-        "uf":       'sgUF',
-        "categoria": 'txtDescricao'
-    }
-
-    if group_by not in key_map:
-        return jsonify({"error": "group_by inválido"}), 400
-
-    key_col = key_map[group_by]
-    params = {}
-    filters = []
-
-    if ano_from:
-        filters.append('"ano" >= :ano_from')
-        params["ano_from"] = ano_from
-    if ano_to:
-        filters.append('"ano" <= :ano_to')
-        params["ano_to"] = ano_to
-
-    where_sql = ("WHERE " + " AND ".join(filters)) if filters else ""
-
-    sql = text(f"""
-        SELECT {key_col} AS key,
-               SUM(CAST(vlrDocumento AS NUMERIC)) AS total
-        FROM gastos_parlamentares
-        {where_sql}
-        GROUP BY {key_col}
-        ORDER BY total DESC
-        LIMIT :limit OFFSET :offset
-    """)
-
-    params["limit"] = page_size
-    params["offset"] = offset
-
-    with engine.connect() as conn:
-        results = conn.execute(sql, params)
-        items = [dict(row._mapping) for row in results]
-
-    return jsonify({
-        "page": page,
-        "page_size": page_size,
-        "results": items
-    })
+    return response
